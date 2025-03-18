@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metronome</title>
+    <style>
+      /* Modern, minimalistic styling */
+      body {
+        background: linear-gradient(to bottom, #3a6186, #89253e);
+        color: #fff;
+        font-family: "Roboto", sans-serif;
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      .container {
+        background: rgba(0, 0, 0, 0.3);
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+        width: 90%;
+        max-width: 400px;
+        text-align: center;
+      }
+      .bpm-display {
+        font-size: 24px;
+        margin: 10px 0;
+      }
+      .tempo-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin: 15px 0;
+      }
+      .tempo-buttons button {
+        margin: 5px;
+        padding: 10px 15px;
+        font-size: 16px;
+        border: none;
+        border-radius: 5px;
+        background: #ff6f61;
+        color: #fff;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      .tempo-buttons button:hover {
+        background: #ff3b2e;
+      }
+      button.start-stop {
+        padding: 10px 20px;
+        font-size: 16px;
+        border: none;
+        border-radius: 5px;
+        background: #ff6f61;
+        color: #fff;
+        cursor: pointer;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: background 0.3s;
+      }
+      button.start-stop:hover {
+        background: #ff3b2e;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Metronome</h1>
+      <div class="bpm-display">BPM: <span id="bpmDisplay">120</span></div>
+      <div class="tempo-buttons">
+        <button data-bpm="40">40</button>
+        <button data-bpm="60">60</button>
+        <button data-bpm="80">80</button>
+        <button data-bpm="120">120</button>
+        <button data-bpm="180">180</button>
+      </div>
+      <button id="startStopButton" class="start-stop">Start</button>
+    </div>
+
+    <script>
+      let audioCtx;
+      let tickBuffer = null;
+      let timerID;
+      // The BPM we use when no transition is active.
+      let currentBPM = 120;
+      let nextTickTime = 0;
+      let lastTickTime = 0;
+      const scheduleAheadTime = 0.1; // seconds
+
+      // Transition variables for BPM interpolation.
+      let transitionActive = false;
+      let transitionStartTime = 0;
+      const transitionDuration = 5; // seconds
+      let startBPM = currentBPM;
+      let targetBPM = currentBPM;
+
+      // Hardcoded tick sound file URL.
+      const tickSoundUrl = "./wind-up.mp3";
+
+      function loadTickSound(url) {
+        fetch(url)
+          .then((response) => response.arrayBuffer())
+          .then((arrayBuffer) => audioCtx.decodeAudioData(arrayBuffer))
+          .then((buffer) => {
+            tickBuffer = buffer;
+          })
+          .catch((e) => console.error("Error loading tick sound:", e));
+      }
+
+      function scheduleTick(time) {
+        if (tickBuffer) {
+          const source = audioCtx.createBufferSource();
+          source.buffer = tickBuffer;
+          source.connect(audioCtx.destination);
+          source.start(time);
+        } else {
+          // Fallback oscillator if the tick sound isn’t loaded.
+          const oscillator = audioCtx.createOscillator();
+          const gainNode = audioCtx.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          oscillator.type = "triangle";
+          oscillator.frequency.setValueAtTime(1500, time);
+          oscillator.frequency.exponentialRampToValueAtTime(300, time + 0.2);
+          gainNode.gain.setValueAtTime(1, time);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
+          oscillator.start(time);
+          oscillator.stop(time + 0.2);
+        }
+      }
+
+      // The scheduler computes an effective BPM for each tick.
+      function scheduler() {
+        while (nextTickTime < audioCtx.currentTime + scheduleAheadTime) {
+          let effectiveBPM;
+          if (transitionActive) {
+            if (nextTickTime < transitionStartTime + transitionDuration) {
+              let t = (nextTickTime - transitionStartTime) / transitionDuration;
+              effectiveBPM = startBPM + (targetBPM - startBPM) * t;
+            } else {
+              effectiveBPM = targetBPM;
+              transitionActive = false;
+              currentBPM = targetBPM;
+            }
+          } else {
+            effectiveBPM = currentBPM;
+          }
+
+          // Update the BPM display.
+          document.getElementById("bpmDisplay").textContent =
+            Math.round(effectiveBPM);
+
+          const interval = 60 / effectiveBPM;
+          scheduleTick(nextTickTime);
+          lastTickTime = nextTickTime;
+          nextTickTime += interval;
+        }
+        timerID = setTimeout(scheduler, 25);
+      }
+
+      function startMetronome() {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          loadTickSound(tickSoundUrl);
+        }
+        lastTickTime = audioCtx.currentTime;
+        nextTickTime = lastTickTime + 60 / currentBPM;
+        scheduler();
+      }
+
+      function stopMetronome() {
+        clearTimeout(timerID);
+        timerID = null;
+      }
+
+      function toggleMetronome() {
+        const startStopButton = document.getElementById("startStopButton");
+        if (timerID) {
+          stopMetronome();
+          startStopButton.textContent = "Start";
+        } else {
+          startMetronome();
+          startStopButton.textContent = "Stop";
+        }
+      }
+
+      // When a tempo button is clicked, initiate a smooth BPM transition.
+      window.addEventListener("DOMContentLoaded", () => {
+        const startStopButton = document.getElementById("startStopButton");
+        startStopButton.addEventListener("click", toggleMetronome);
+
+        const buttons = document.querySelectorAll(".tempo-buttons button");
+        buttons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const newTempo = parseInt(button.getAttribute("data-bpm"), 10);
+            if (!timerID) {
+              // Start the metronome if not already running.
+              toggleMetronome();
+            }
+            // Begin a transition: record the current BPM as the start and set a target.
+            transitionActive = true;
+            transitionStartTime = audioCtx.currentTime;
+            startBPM = currentBPM;
+            targetBPM = newTempo;
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
